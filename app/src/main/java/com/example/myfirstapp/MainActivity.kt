@@ -9,7 +9,6 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
-import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import java.text.NumberFormat
@@ -36,7 +35,6 @@ class MainActivity : AppCompatActivity() {
         }
         scrollView.addView(mainLayout)
 
-        // Title Header
         val header = TextView(this).apply {
             text = "Salary & Payroll Manager"
             textSize = 24f
@@ -47,18 +45,16 @@ class MainActivity : AppCompatActivity() {
         }
         mainLayout.addView(header)
 
-        // Input Fields
-        val monthInput = createInputField("Month / Description (e.g. Oct 2026)", InputType.TYPE_CLASS_TEXT)
+        val monthInput = createInputField("Month / Note (e.g. Oct 2026)", InputType.TYPE_CLASS_TEXT)
         val basicSalaryInput = createInputField("Basic Salary", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
         val allowancesInput = createInputField("Allowances / OT", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
-        val deductionsInput = createInputField("Deductions (EPF / Tax / Advances)", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
+        val deductionsInput = createInputField("Deductions (EPF / Tax / Loan)", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
 
         mainLayout.addView(monthInput)
         mainLayout.addView(basicSalaryInput)
         mainLayout.addView(allowancesInput)
         mainLayout.addView(deductionsInput)
 
-        // Live Net Salary Summary Display
         netSalaryPreview = TextView(this).apply {
             text = "Net Salary: $0.00"
             textSize = 20f
@@ -70,7 +66,6 @@ class MainActivity : AppCompatActivity() {
         }
         mainLayout.addView(netSalaryPreview)
 
-        // Button Row
         val buttonRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             weightSum = 2f
@@ -101,7 +96,6 @@ class MainActivity : AppCompatActivity() {
                 netSalaryPreview.text = "Net: " + formatCurrency(netSalary)
                 Toast.makeText(this@MainActivity, "Record Saved", Toast.LENGTH_SHORT).show()
 
-                // Reset Inputs
                 monthInput.text.clear()
                 basicSalaryInput.text.clear()
                 allowancesInput.text.clear()
@@ -128,7 +122,6 @@ class MainActivity : AppCompatActivity() {
         buttonRow.addView(clearButton)
         mainLayout.addView(buttonRow)
 
-        // History Section Header
         val historyTitle = TextView(this).apply {
             text = "Payroll History"
             textSize = 18f
@@ -226,7 +219,6 @@ class MainActivity : AppCompatActivity() {
     }
 }
 
-// Data class
 data class SalaryRecord(
     val id: Long,
     val month: String,
@@ -236,7 +228,6 @@ data class SalaryRecord(
     val net: Double
 )
 
-// Embedded SQLite Database Helper
 class SalaryDbHelper(context: Context) : SQLiteOpenHelper(context, "salary.db", null, 1) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
