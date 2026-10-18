@@ -24,10 +24,6 @@ import java.util.*
 // 1. DOMAIN LAYER: STRICT MONEY ARITHMETIC & VALUE OBJECTS
 // ============================================================================
 
-/**
- * Immutable Money value object representing monetary values in integer minor units (cents).
- * Completely eliminates binary floating-point rounding errors.
- */
 data class Money(
     val amountMinor: Long,
     val currency: String
@@ -42,16 +38,7 @@ data class Money(
         return Money(amountMinor - other.amountMinor, currency)
     }
 
-    operator fun times(factor: Double): Money {
-        val multiplied = BigDecimal.valueOf(amountMinor)
-            .multiply(BigDecimal.valueOf(factor))
-            .setScale(0, RoundingMode.HALF_UP)
-            .toLong()
-        return Money(multiplied, currency)
-    }
-
     fun isPositive(): Boolean = amountMinor > 0L
-    fun isZero(): Boolean = amountMinor == 0L
 
     fun format(): String {
         val majorUnits = BigDecimal.valueOf(amountMinor).divide(BigDecimal.valueOf(100), 2, RoundingMode.UNNECESSARY)
@@ -67,9 +54,11 @@ data class Money(
         }
     }
 
-    companion object {
-        fun zero(currency: String): Money = Money(0L, currency)
+    fun toDecimalString(): String {
+        return BigDecimal.valueOf(amountMinor).divide(BigDecimal.valueOf(100), 2, RoundingMode.UNNECESSARY).toPlainString()
+    }
 
+    companion object {
         fun fromMajorString(input: String, currency: String): Money {
             val clean = input.trim().replace(",", "")
             if (clean.isEmpty()) return Money(0L, currency)
@@ -83,7 +72,7 @@ data class Money(
 data class Account(
     val id: Long,
     val name: String,
-    val type: String, // BANK, CASH, SAVINGS
+    val type: String,
     val currency: String,
     val openingBalanceMinor: Long,
     val currentBalance: Money
@@ -91,11 +80,12 @@ data class Account(
 
 data class TransactionItem(
     val id: Long,
-    val type: String, // INCOME, EXPENSE, TRANSFER
+    val type: String,
     val amount: Money,
+    val accountId: Long,
     val accountName: String,
     val destinationAccountName: String?,
-    val category: String, // NEED, WANT, SALARY, TRANSFER
+    val category: String,
     val payeeOrNote: String,
     val dateString: String
 )
@@ -109,10 +99,10 @@ data class RecurringBill(
 )
 
 // ============================================================================
-// 2. DATA LAYER: MULTI-ACCOUNT SQLITE REPOSITORY WITH ATOMIC WRITES
+// 2. DATA LAYER: MULTI-ACCOUNT SQLITE REPOSITORY (FULL CRUD)
 // ============================================================================
 
-class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_master_v1.db", null, 1) {
+class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_master_v2.db", null, 1) {
 
     override fun onCreate(db: SQLiteDatabase) {
         // Accounts table
@@ -130,11 +120,11 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
         )
 
         // Seed default accounts
-        db.execSQL("INSERT INTO accounts (name, type, currency, opening_balance_minor) VALUES ('Primary Bank Account', 'BANK', 'LKR', 12500000)") // Rs. 125,000.00
-        db.execSQL("INSERT INTO accounts (name, type, currency, opening_balance_minor) VALUES ('Cash Wallet', 'CASH', 'LKR', 1500000)")          // Rs. 15,000.00
-        db.execSQL("INSERT INTO accounts (name, type, currency, opening_balance_minor) VALUES ('Emergency Vault', 'SAVINGS', 'LKR', 25000000)")   // Rs. 250,000.00
+        db.execSQL("INSERT INTO accounts (name, type, currency, opening_balance_minor) VALUES ('Primary Bank Account', 'BANK', 'LKR', 12500000)")
+        db.execSQL("INSERT INTO accounts (name, type, currency, opening_balance_minor) VALUES ('Cash Wallet', 'CASH', 'LKR', 1500000)")
+        db.execSQL("INSERT INTO accounts (name, type, currency, opening_balance_minor) VALUES ('Emergency Vault', 'SAVINGS', 'LKR', 25000000)")
 
-        // Profile configuration (payday anchor and base currency)
+        // Profile configuration
         db.execSQL(
             """
             CREATE TABLE user_profile (
@@ -146,7 +136,7 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
         )
         db.execSQL("INSERT INTO user_profile (id, payday_anchor_day, base_currency) VALUES (1, 25, 'LKR')")
 
-        // Recurring bills
+        // Recurring bills table
         db.execSQL(
             """
             CREATE TABLE recurring_bills (
@@ -161,7 +151,7 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
         )
         db.execSQL("INSERT INTO recurring_bills (title, amount_minor, currency, due_day, is_paid) VALUES ('Apartment Rent', 4500000, 'LKR', 5, 0)")
         db.execSQL("INSERT INTO recurring_bills (title, amount_minor, currency, due_day, is_paid) VALUES ('Electricity (CEB)', 850000, 'LKR', 12, 0)")
-        db.execSQL("INSERT INTO recurring_bills (title, amount_minor, currency, due_day, is_paid) VALUES ('High-Speed Fiber', 420000, 'LKR', 18, 0)")
+        db.execSQL("INSERT INTO recurring_bills (title, amount_minor, currency, due_day, is_paid) VALUES ('Dialog Broadband', 420000, 'LKR', 18, 0)")
 
         // Transactions ledger
         db.execSQL(
@@ -177,12 +167,10 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
                 note TEXT NOT NULL,
                 date_str TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
-                FOREIGN KEY(account_id) REFERENCES accounts(id),
-                FOREIGN KEY(destination_account_id) REFERENCES accounts(id)
+                FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
             )
             """.trimIndent()
         )
-        db.execSQL("CREATE INDEX idx_trans_date ON transactions(date_str)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -193,6 +181,7 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
         onCreate(db)
     }
 
+    // --- Profile Settings ---
     fun getPaydayAnchor(): Int {
         val cursor = readableDatabase.rawQuery("SELECT payday_anchor_day FROM user_profile WHERE id = 1", null)
         var anchor = 25
@@ -217,6 +206,7 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
         writableDatabase.update("user_profile", cv, "id = 1", null)
     }
 
+    // --- Accounts CRUD ---
     fun getAccounts(): List<Account> {
         val list = mutableListOf<Account>()
         val db = readableDatabase
@@ -229,7 +219,6 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
                 val currency = it.getString(3)
                 val opening = it.getLong(4)
 
-                // Calculate current balance: opening + income/transfers-in - expenses/transfers-out
                 val inCursor = db.rawQuery(
                     "SELECT SUM(amount_minor) FROM transactions WHERE (account_id = ? AND type = 'INCOME') OR (destination_account_id = ? AND type = 'TRANSFER')",
                     arrayOf(accId.toString(), accId.toString())
@@ -251,35 +240,38 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
         return list
     }
 
-    fun addTransaction(
-        type: String,
-        amount: Money,
-        accountId: Long,
-        destAccountId: Long?,
-        category: String,
-        note: String
-    ) {
+    fun insertAccount(name: String, type: String, currency: String, openingBalanceMinor: Long): Long {
+        val cv = ContentValues().apply {
+            put("name", name)
+            put("type", type)
+            put("currency", currency)
+            put("opening_balance_minor", openingBalanceMinor)
+        }
+        return writableDatabase.insert("accounts", null, cv)
+    }
+
+    fun updateAccount(id: Long, name: String, type: String, openingBalanceMinor: Long) {
+        val cv = ContentValues().apply {
+            put("name", name)
+            put("type", type)
+            put("opening_balance_minor", openingBalanceMinor)
+        }
+        writableDatabase.update("accounts", cv, "id = ?", arrayOf(id.toString()))
+    }
+
+    fun deleteAccount(id: Long) {
         val db = writableDatabase
         db.beginTransaction()
         try {
-            val cv = ContentValues().apply {
-                put("type", type)
-                put("amount_minor", amount.amountMinor)
-                put("currency", amount.currency)
-                put("account_id", accountId)
-                if (destAccountId != null) put("destination_account_id", destAccountId)
-                put("category", category)
-                put("note", note)
-                put("date_str", SimpleDateFormat("MMM dd, yyyy", Locale.US).format(Date()))
-                put("created_at", System.currentTimeMillis())
-            }
-            db.insert("transactions", null, cv)
+            db.delete("transactions", "account_id = ? OR destination_account_id = ?", arrayOf(id.toString(), id.toString()))
+            db.delete("accounts", "id = ?", arrayOf(id.toString()))
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
     }
 
+    // --- Recurring Bills CRUD ---
     fun getRecurringBills(): List<RecurringBill> {
         val list = mutableListOf<RecurringBill>()
         val cursor = readableDatabase.rawQuery("SELECT id, title, amount_minor, currency, due_day, is_paid FROM recurring_bills ORDER BY due_day ASC", null)
@@ -299,6 +291,30 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
         return list
     }
 
+    fun insertBill(title: String, amountMinor: Long, currency: String, dueDay: Int): Long {
+        val cv = ContentValues().apply {
+            put("title", title)
+            put("amount_minor", amountMinor)
+            put("currency", currency)
+            put("due_day", dueDay)
+            put("is_paid", 0)
+        }
+        return writableDatabase.insert("recurring_bills", null, cv)
+    }
+
+    fun updateBill(id: Long, title: String, amountMinor: Long, dueDay: Int) {
+        val cv = ContentValues().apply {
+            put("title", title)
+            put("amount_minor", amountMinor)
+            put("due_day", dueDay)
+        }
+        writableDatabase.update("recurring_bills", cv, "id = ?", arrayOf(id.toString()))
+    }
+
+    fun deleteBill(id: Long) {
+        writableDatabase.delete("recurring_bills", "id = ?", arrayOf(id.toString()))
+    }
+
     fun markBillPaid(billId: Long, accountId: Long) {
         val db = writableDatabase
         db.beginTransaction()
@@ -309,18 +325,16 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
                 val amountMinor = c.getLong(1)
                 val currency = c.getString(2)
 
-                // 1. Mark bill paid
                 val cv = ContentValues().apply { put("is_paid", 1) }
                 db.update("recurring_bills", cv, "id = ?", arrayOf(billId.toString()))
 
-                // 2. Insert expense ledger entry
                 val transCv = ContentValues().apply {
                     put("type", "EXPENSE")
                     put("amount_minor", amountMinor)
                     put("currency", currency)
                     put("account_id", accountId)
                     put("category", "NEED")
-                    put("note", "Bill Paid: $title")
+                    put("note", "Bill: $title")
                     put("date_str", SimpleDateFormat("MMM dd, yyyy", Locale.US).format(Date()))
                     put("created_at", System.currentTimeMillis())
                 }
@@ -338,10 +352,39 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
         writableDatabase.update("recurring_bills", cv, null, null)
     }
 
-    fun getRecentTransactions(limit: Int = 20): List<TransactionItem> {
+    // --- Transactions CRUD ---
+    fun addTransaction(type: String, amount: Money, accountId: Long, destAccountId: Long?, category: String, note: String) {
+        val cv = ContentValues().apply {
+            put("type", type)
+            put("amount_minor", amount.amountMinor)
+            put("currency", amount.currency)
+            put("account_id", accountId)
+            if (destAccountId != null) put("destination_account_id", destAccountId)
+            put("category", category)
+            put("note", note)
+            put("date_str", SimpleDateFormat("MMM dd, yyyy", Locale.US).format(Date()))
+            put("created_at", System.currentTimeMillis())
+        }
+        writableDatabase.insert("transactions", null, cv)
+    }
+
+    fun updateTransaction(id: Long, amountMinor: Long, category: String, note: String) {
+        val cv = ContentValues().apply {
+            put("amount_minor", amountMinor)
+            put("category", category)
+            put("note", note)
+        }
+        writableDatabase.update("transactions", cv, "id = ?", arrayOf(id.toString()))
+    }
+
+    fun deleteTransaction(id: Long) {
+        writableDatabase.delete("transactions", "id = ?", arrayOf(id.toString()))
+    }
+
+    fun getRecentTransactions(limit: Int = 30): List<TransactionItem> {
         val list = mutableListOf<TransactionItem>()
         val sql = """
-            SELECT t.id, t.type, t.amount_minor, t.currency, a.name, da.name, t.category, t.note, t.date_str
+            SELECT t.id, t.type, t.amount_minor, t.currency, t.account_id, a.name, da.name, t.category, t.note, t.date_str
             FROM transactions t
             JOIN accounts a ON t.account_id = a.id
             LEFT JOIN accounts da ON t.destination_account_id = da.id
@@ -356,11 +399,12 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
                         id = it.getLong(0),
                         type = it.getString(1),
                         amount = Money(it.getLong(2), it.getString(3)),
-                        accountName = it.getString(4),
-                        destinationAccountName = it.getString(5),
-                        category = it.getString(6),
-                        payeeOrNote = it.getString(7),
-                        dateString = it.getString(8)
+                        accountId = it.getLong(4),
+                        accountName = it.getString(5),
+                        destinationAccountName = it.getString(6),
+                        category = it.getString(7),
+                        payeeOrNote = it.getString(8),
+                        dateString = it.getString(9)
                     )
                 )
             }
@@ -382,13 +426,10 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
                 val curr = it.getString(3)
 
                 if (curr == baseCurrency) {
-                    if (type == "INCOME") {
-                        totalIncome += amt
-                    } else if (type == "EXPENSE") {
+                    if (type == "INCOME") totalIncome += amt
+                    else if (type == "EXPENSE") {
                         totalExpenses += amt
-                        if (cat == "WANT") {
-                            wantsExpenses += amt
-                        }
+                        if (cat == "WANT") wantsExpenses += amt
                     }
                 }
             }
@@ -398,14 +439,13 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, "money_mas
 }
 
 // ============================================================================
-// 3. PRESENTATION LAYER: MODERN FINTECH DASHBOARD & CONTROLS
+// 3. PRESENTATION LAYER: FULLY INTERACTIVE FINTECH DASHBOARD
 // ============================================================================
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var dbHelper: AppDatabaseHelper
 
-    // Metric Displays
     private lateinit var totalCapitalText: TextView
     private lateinit var dailySafeSpendText: TextView
     private lateinit var daysRemainingText: TextView
@@ -414,7 +454,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var advisorTitle: TextView
     private lateinit var advisorText: TextView
 
-    // Dynamic Lists
     private lateinit var accountsContainer: LinearLayout
     private lateinit var billsContainer: LinearLayout
     private lateinit var ledgerContainer: LinearLayout
@@ -438,7 +477,7 @@ class MainActivity : AppCompatActivity() {
         }
         scrollView.addView(mainLayout)
 
-        // Header with Base Currency Switcher
+        // Top Navigation & Currency Switcher
         val headerBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 0, 0, 24)
@@ -454,7 +493,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
         }
         val appSubtitle = TextView(this).apply {
-            text = "Multi-Account Ledger • Payday Anchor"
+            text = "Tap any card or item to edit"
             textSize = 12f
             setTextColor(Color.parseColor("#64748B"))
         }
@@ -480,7 +519,7 @@ class MainActivity : AppCompatActivity() {
         headerBar.addView(currencySpinner)
         mainLayout.addView(headerBar)
 
-        // 1. Executive Snapshot Card (Liquid Capital, Safe-to-Spend, Runway)
+        // 1. Executive Snapshot Card (Tap "Days to Payday" to edit anchor)
         val snapCard = createStyledCard("#0F172A", "#1E293B")
         val capLabel = createLabel("TOTAL LIQUID CAPITAL (ACROSS ALL VAULTS)")
         totalCapitalText = TextView(this).apply {
@@ -502,8 +541,9 @@ class MainActivity : AppCompatActivity() {
         val safeSpendCol = createMetricItem("SAFE DAILY SPEND", "#10B981")
         dailySafeSpendText = safeSpendCol.second
 
-        val daysCol = createMetricItem("DAYS TO PAYDAY", "#38BDF8")
+        val daysCol = createMetricItem("DAYS TO PAYDAY (EDIT)", "#38BDF8")
         daysRemainingText = daysCol.second
+        daysCol.first.setOnClickListener { showEditPaydayAnchorDialog() }
 
         val runwayCol = createMetricItem("EMERGENCY RUNWAY", "#F59E0B")
         runwayText = runwayCol.second
@@ -518,7 +558,7 @@ class MainActivity : AppCompatActivity() {
         snapCard.addView(metricsGrid)
         mainLayout.addView(snapCard)
 
-        // 2. Spending Leak / 50-30-20 Advisor Banner
+        // 2. Spending Leak Advisor Banner
         advisorBanner = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 20, 24, 20)
@@ -530,19 +570,27 @@ class MainActivity : AppCompatActivity() {
         advisorBanner.addView(advisorText)
         mainLayout.addView(advisorBanner)
 
-        // 3. Vaults / Multi-Account Strip
+        // 3. Vaults / Multi-Account Strip (Tap card to edit, "+ Add" to create)
         val accHeaderRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 0, 0, 12)
         }
         val accTitle = TextView(this).apply {
-            text = "Active Accounts & Balances"
+            text = "Active Accounts & Vaults"
             textSize = 16f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
         }
+        val addAccBtn = TextView(this).apply {
+            text = "+ Add Vault"
+            textSize = 13f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#38BDF8"))
+            setOnClickListener { showAddAccountDialog() }
+        }
         accHeaderRow.addView(accTitle)
+        accHeaderRow.addView(addAccBtn)
         mainLayout.addView(accHeaderRow)
 
         accountsContainer = LinearLayout(this).apply {
@@ -551,7 +599,7 @@ class MainActivity : AppCompatActivity() {
         }
         mainLayout.addView(accountsContainer)
 
-        // 4. Quick Action Buttons: Log Expense | Log Inflow | Transfer
+        // 4. Quick Action Buttons
         val actionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             weightSum = 3f
@@ -566,7 +614,7 @@ class MainActivity : AppCompatActivity() {
         actionRow.addView(transferBtn)
         mainLayout.addView(actionRow)
 
-        // 5. Recurring Bills & Quarantine Engine
+        // 5. Recurring Bills Strip (Tap bill to edit, "+ Add Bill" to create)
         val billTitleRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, 0, 0, 12)
@@ -578,17 +626,26 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
         }
+        val addBillBtn = TextView(this).apply {
+            text = "+ Add Bill"
+            textSize = 13f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#38BDF8"))
+            setPadding(0, 0, 20, 0)
+            setOnClickListener { showAddBillDialog() }
+        }
         val resetBills = TextView(this).apply {
             text = "Reset Cycle"
-            textSize = 12f
-            setTextColor(Color.parseColor("#38BDF8"))
+            textSize = 13f
+            setTextColor(Color.parseColor("#94A3B8"))
             setOnClickListener {
                 dbHelper.resetMonthlyBills()
                 refreshDashboard()
-                Toast.makeText(this@MainActivity, "Cycle bills reset to pending", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "Cycle bills reset", Toast.LENGTH_SHORT).show()
             }
         }
         billTitleRow.addView(billTitle)
+        billTitleRow.addView(addBillBtn)
         billTitleRow.addView(resetBills)
         mainLayout.addView(billTitleRow)
 
@@ -598,9 +655,9 @@ class MainActivity : AppCompatActivity() {
         }
         mainLayout.addView(billsContainer)
 
-        // 6. Recent Ledger
+        // 6. Recent Ledger (Tap any transaction row to edit or delete)
         val ledgerTitle = TextView(this).apply {
-            text = "Recent Transactions"
+            text = "Recent Transactions (Tap to Edit)"
             textSize = 16f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
@@ -621,7 +678,7 @@ class MainActivity : AppCompatActivity() {
         val anchor = dbHelper.getPaydayAnchor()
         val baseCurrency = dbHelper.getBaseCurrency()
 
-        // 1. Calculate Total Liquid Capital
+        // 1. Total Liquid Capital
         val liquidSumMinor = accounts.filter { it.currency == baseCurrency }.sumOf { it.currentBalance.amountMinor }
         val totalCapital = Money(liquidSumMinor, baseCurrency)
         totalCapitalText.text = totalCapital.format()
@@ -635,23 +692,22 @@ class MainActivity : AppCompatActivity() {
         } else {
             (maxDaysInMonth - currentDay) + anchor
         }.coerceAtLeast(1)
+        daysRemainingText.text = "$daysRemaining Days (Payday $anchor)"
 
-        daysRemainingText.text = "$daysRemaining Days"
-
-        // 3. Quarantined Pending Bills & Safe Daily Spend
+        // 3. Quarantined Bills & Safe Spend
         val pendingBillsSumMinor = bills.filter { !it.isPaid && it.amount.currency == baseCurrency }.sumOf { it.amount.amountMinor }
         val freeToSpendMinor = (totalCapital.amountMinor - pendingBillsSumMinor).coerceAtLeast(0L)
         val dailySafeMinor = freeToSpendMinor / daysRemaining
         dailySafeSpendText.text = Money(dailySafeMinor, baseCurrency).format()
 
-        // 4. Emergency Runway Calculation
+        // 4. Runway
         val totalMonthlyBurnMinor = bills.filter { it.amount.currency == baseCurrency }.sumOf { it.amount.amountMinor }
         val burnRate = if (totalMonthlyBurnMinor > 0L) totalMonthlyBurnMinor.toDouble() else 1.0
         val runwayMonths = if (totalCapital.amountMinor > 0L) totalCapital.amountMinor.toDouble() / burnRate else 0.0
         runwayText.text = String.format(Locale.US, "%.1f Mo", runwayMonths)
 
-        // 5. 50/30/20 Smart Spending Advisor
-        val (totalIncome, totalExpenses, wantsExpenses) = dbHelper.getCashflowMetrics(baseCurrency)
+        // 5. 50/30/20 Advisor
+        val (totalIncome, _, wantsExpenses) = dbHelper.getCashflowMetrics(baseCurrency)
         if (totalIncome.amountMinor > 0L) {
             val wantsPercent = (wantsExpenses.amountMinor.toDouble() / totalIncome.amountMinor.toDouble()) * 100.0
             if (wantsPercent > 30.0) {
@@ -664,7 +720,7 @@ class MainActivity : AppCompatActivity() {
                 advisorTitle.text = "⚠️ HIGH DISCRETIONARY BURN AUDIT"
                 advisorText.setTextColor(Color.parseColor("#FFE4E6"))
                 val excessMinor = (wantsExpenses.amountMinor - (totalIncome.amountMinor * 0.30)).toLong()
-                advisorText.text = "Non-essential 'Wants' account for ${String.format(Locale.US, "%.1f", wantsPercent)}% of inflow (Target: <30%). Cutting ${Money(excessMinor, baseCurrency).format()} will restore your required 20% savings buffer."
+                advisorText.text = "Non-essential 'Wants' account for ${String.format(Locale.US, "%.1f", wantsPercent)}% of inflow (Target: <30%). Cutting ${Money(excessMinor, baseCurrency).format()} will restore your savings rate."
             } else {
                 advisorBanner.background = GradientDrawable().apply {
                     setColor(Color.parseColor("#0C2018"))
@@ -687,7 +743,6 @@ class MainActivity : AppCompatActivity() {
             advisorText.text = "Log monthly salary or income using '+ Inflow' to activate predictive burn tracking."
         }
 
-        // Render UI Sections
         renderAccounts(accounts)
         renderBills(bills)
         renderLedger(dbHelper.getRecentTransactions())
@@ -705,6 +760,7 @@ class MainActivity : AppCompatActivity() {
                     setStroke(1, Color.parseColor("#1E293B"))
                 }
                 layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 10 }
+                setOnClickListener { showEditAccountDialog(acc) }
             }
 
             val col = LinearLayout(this).apply {
@@ -718,7 +774,7 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(Color.WHITE)
             }
             val typeTag = TextView(this).apply {
-                text = "${acc.type} • ${acc.currency}"
+                text = "${acc.type} • ${acc.currency} • Tap to edit"
                 textSize = 11f
                 setTextColor(Color.parseColor("#64748B"))
                 setPadding(0, 2, 0, 0)
@@ -752,6 +808,7 @@ class MainActivity : AppCompatActivity() {
                     if (!bill.isPaid) setStroke(1, Color.parseColor("#334155"))
                 }
                 layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 10 }
+                setOnClickListener { showEditBillDialog(bill) }
             }
 
             val col = LinearLayout(this).apply {
@@ -765,7 +822,7 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(if (bill.isPaid) Color.parseColor("#64748B") else Color.WHITE)
             }
             val status = TextView(this).apply {
-                text = if (bill.isPaid) "Paid • Deducted from Vault" else "Quarantined • Due Day ${bill.dueDay}"
+                text = if (bill.isPaid) "Paid • Tap to edit" else "Due Day ${bill.dueDay} • Tap to edit"
                 textSize = 11f
                 setTextColor(if (bill.isPaid) Color.parseColor("#10B981") else Color.parseColor("#F59E0B"))
             }
@@ -829,6 +886,7 @@ class MainActivity : AppCompatActivity() {
                     cornerRadius = 12f
                 }
                 layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 8 }
+                setOnClickListener { showEditTransactionDialog(item) }
             }
 
             val col = LinearLayout(this).apply {
@@ -842,11 +900,7 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(Color.WHITE)
             }
             val sub = TextView(this).apply {
-                val flowContext = if (item.type == "TRANSFER") {
-                    "${item.accountName} ➔ ${item.destinationAccountName}"
-                } else {
-                    "${item.accountName} • ${item.category}"
-                }
+                val flowContext = if (item.type == "TRANSFER") "${item.accountName} ➔ ${item.destinationAccountName}" else "${item.accountName} • ${item.category}"
                 text = "${item.dateString} • $flowContext"
                 textSize = 11f
                 setTextColor(when (item.type) {
@@ -880,10 +934,262 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Dialog Helpers for Input
+    // ========================================================================
+    // EDIT & CREATE DIALOGS (ACCOUNTS, BILLS, TRANSACTIONS, PAYDAY)
+    // ========================================================================
+
+    private fun showAddAccountDialog() {
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle("Add New Account / Vault")
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 20, 40, 10)
+        }
+
+        val nameInput = EditText(this).apply { hint = "Account Name (e.g. Commercial Bank)" }
+        val balanceInput = EditText(this).apply {
+            hint = "Opening Balance"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        val typeSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, arrayOf("BANK", "CASH", "SAVINGS"))
+        }
+
+        layout.addView(nameInput)
+        layout.addView(balanceInput)
+        layout.addView(TextView(this).apply { text = "Account Type"; textSize = 11f; setPadding(0, 10, 0, 2) })
+        layout.addView(typeSpinner)
+
+        builder.setView(layout)
+        builder.setPositiveButton("Create") { _, _ ->
+            val name = nameInput.text.toString().trim()
+            val balStr = balanceInput.text.toString().trim()
+            if (name.isNotEmpty()) {
+                val money = Money.fromMajorString(balStr, currentCurrency)
+                val type = typeSpinner.selectedItem.toString()
+                dbHelper.insertAccount(name, type, currentCurrency, money.amountMinor)
+                refreshDashboard()
+            }
+        }
+        builder.setNegativeButton("Cancel", null)
+        builder.show()
+    }
+
+    private fun showEditAccountDialog(account: Account) {
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle("Edit Account: ${account.name}")
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 20, 40, 10)
+        }
+
+        val nameInput = EditText(this).apply {
+            setText(account.name)
+            hint = "Account Name"
+        }
+        val balanceInput = EditText(this).apply {
+            val initialMoney = Money(account.openingBalanceMinor, account.currency)
+            setText(initialMoney.toDecimalString())
+            hint = "Opening Balance"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        val typeSpinner = Spinner(this).apply {
+            val types = arrayOf("BANK", "CASH", "SAVINGS")
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, types)
+            setSelection(types.indexOf(account.type).coerceAtLeast(0))
+        }
+
+        layout.addView(nameInput)
+        layout.addView(TextView(this).apply { text = "Base Opening Balance"; textSize = 11f; setPadding(0, 10, 0, 2) })
+        layout.addView(balanceInput)
+        layout.addView(TextView(this).apply { text = "Account Type"; textSize = 11f; setPadding(0, 10, 0, 2) })
+        layout.addView(typeSpinner)
+
+        builder.setView(layout)
+        builder.setPositiveButton("Save") { _, _ ->
+            val name = nameInput.text.toString().trim()
+            val balStr = balanceInput.text.toString().trim()
+            if (name.isNotEmpty()) {
+                val money = Money.fromMajorString(balStr, account.currency)
+                val type = typeSpinner.selectedItem.toString()
+                dbHelper.updateAccount(account.id, name, type, money.amountMinor)
+                refreshDashboard()
+            }
+        }
+        builder.setNeutralButton("Delete") { _, _ ->
+            dbHelper.deleteAccount(account.id)
+            refreshDashboard()
+            Toast.makeText(this, "Account and associated logs deleted", Toast.LENGTH_SHORT).show()
+        }
+        builder.setNegativeButton("Cancel", null)
+        builder.show()
+    }
+
+    private fun showAddBillDialog() {
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle("Add Committed Recurring Bill")
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 20, 40, 10)
+        }
+
+        val titleInput = EditText(this).apply { hint = "Bill Title (e.g. Gym, Water)" }
+        val amountInput = EditText(this).apply {
+            hint = "Estimated Amount"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        val dueDayInput = EditText(this).apply {
+            hint = "Due Day of Month (1-31)"
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+
+        layout.addView(titleInput)
+        layout.addView(amountInput)
+        layout.addView(dueDayInput)
+
+        builder.setView(layout)
+        builder.setPositiveButton("Add Bill") { _, _ ->
+            val title = titleInput.text.toString().trim()
+            val amtStr = amountInput.text.toString().trim()
+            val day = dueDayInput.text.toString().toIntOrNull() ?: 1
+            if (title.isNotEmpty() && amtStr.isNotEmpty()) {
+                val money = Money.fromMajorString(amtStr, currentCurrency)
+                dbHelper.insertBill(title, money.amountMinor, currentCurrency, day)
+                refreshDashboard()
+            }
+        }
+        builder.setNegativeButton("Cancel", null)
+        builder.show()
+    }
+
+    private fun showEditBillDialog(bill: RecurringBill) {
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle("Edit Recurring Bill")
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 20, 40, 10)
+        }
+
+        val titleInput = EditText(this).apply { setText(bill.title); hint = "Title" }
+        val amountInput = EditText(this).apply {
+            setText(bill.amount.toDecimalString())
+            hint = "Estimated Amount"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        val dueDayInput = EditText(this).apply {
+            setText(bill.dueDay.toString())
+            hint = "Due Day (1-31)"
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+
+        layout.addView(titleInput)
+        layout.addView(amountInput)
+        layout.addView(dueDayInput)
+
+        builder.setView(layout)
+        builder.setPositiveButton("Save") { _, _ ->
+            val title = titleInput.text.toString().trim()
+            val amtStr = amountInput.text.toString().trim()
+            val day = dueDayInput.text.toString().toIntOrNull() ?: bill.dueDay
+            if (title.isNotEmpty() && amtStr.isNotEmpty()) {
+                val money = Money.fromMajorString(amtStr, bill.amount.currency)
+                dbHelper.updateBill(bill.id, title, money.amountMinor, day)
+                refreshDashboard()
+            }
+        }
+        builder.setNeutralButton("Delete") { _, _ ->
+            dbHelper.deleteBill(bill.id)
+            refreshDashboard()
+            Toast.makeText(this, "Bill deleted", Toast.LENGTH_SHORT).show()
+        }
+        builder.setNegativeButton("Cancel", null)
+        builder.show()
+    }
+
+    private fun showEditTransactionDialog(item: TransactionItem) {
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle("Edit Ledger Entry")
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 20, 40, 10)
+        }
+
+        val noteInput = EditText(this).apply {
+            setText(item.payeeOrNote)
+            hint = "Description / Note"
+        }
+        val amountInput = EditText(this).apply {
+            setText(item.amount.toDecimalString())
+            hint = "Amount"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        val categorySpinner = Spinner(this).apply {
+            val categories = arrayOf("NEED", "WANT", "SALARY", "TRANSFER")
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, categories)
+            setSelection(categories.indexOf(item.category).coerceAtLeast(0))
+        }
+
+        layout.addView(noteInput)
+        layout.addView(amountInput)
+        layout.addView(TextView(this).apply { text = "Category"; textSize = 11f; setPadding(0, 10, 0, 2) })
+        layout.addView(categorySpinner)
+
+        builder.setView(layout)
+        builder.setPositiveButton("Save Changes") { _, _ ->
+            val note = noteInput.text.toString().trim()
+            val amtStr = amountInput.text.toString().trim()
+            if (note.isNotEmpty() && amtStr.isNotEmpty()) {
+                val money = Money.fromMajorString(amtStr, item.amount.currency)
+                val cat = categorySpinner.selectedItem.toString()
+                dbHelper.updateTransaction(item.id, money.amountMinor, cat, note)
+                refreshDashboard()
+                Toast.makeText(this, "Transaction updated", Toast.LENGTH_SHORT).show()
+            }
+        }
+        builder.setNeutralButton("Delete") { _, _ ->
+            dbHelper.deleteTransaction(item.id)
+            refreshDashboard()
+            Toast.makeText(this, "Transaction deleted & balances recalculated", Toast.LENGTH_SHORT).show()
+        }
+        builder.setNegativeButton("Cancel", null)
+        builder.show()
+    }
+
+    private fun showEditPaydayAnchorDialog() {
+        val currentAnchor = dbHelper.getPaydayAnchor()
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle("Set Payday Anchor Day")
+
+        val input = EditText(this).apply {
+            setText(currentAnchor.toString())
+            inputType = InputType.TYPE_CLASS_NUMBER
+            hint = "Day of Month (1 - 31)"
+            setPadding(40, 30, 40, 30)
+        }
+        builder.setView(input)
+        builder.setPositiveButton("Update") { _, _ ->
+            val day = input.text.toString().toIntOrNull()
+            if (day != null && day in 1..31) {
+                dbHelper.updatePaydayAnchor(day)
+                refreshDashboard()
+                Toast.makeText(this, "Payday anchor set to day $day", Toast.LENGTH_SHORT).show()
+            }
+        }
+        builder.setNegativeButton("Cancel", null)
+        builder.show()
+    }
+
     private fun showTransactionDialog(type: String) {
         val accounts = dbHelper.getAccounts()
-        if (accounts.isEmpty()) return
+        if (accounts.isEmpty()) {
+            Toast.makeText(this, "Please create an account first", Toast.LENGTH_SHORT).show()
+            return
+        }
 
         val builder = AlertDialog.Builder(this)
         builder.setTitle(if (type == "INCOME") "Record Inflow / Salary" else "Record Expense")
@@ -905,7 +1211,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val categorySpinner = Spinner(this).apply {
-            val cats = if (type == "INCOME") arrayOf("Salary / Primary", "Side Income / Bonus") else arrayOf("Essential (Need)", "Discretionary (Want)")
+            val cats = if (type == "INCOME") arrayOf("SALARY", "SIDE_INCOME") else arrayOf("NEED", "WANT")
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, cats)
         }
 
@@ -924,7 +1230,7 @@ class MainActivity : AppCompatActivity() {
             if (note.isNotEmpty() && amtString.isNotEmpty()) {
                 val money = Money.fromMajorString(amtString, selectedAccount.currency)
                 if (money.isPositive()) {
-                    val category = if (type == "INCOME") "SALARY" else if (categorySpinner.selectedItemPosition == 0) "NEED" else "WANT"
+                    val category = categorySpinner.selectedItem.toString()
                     dbHelper.addTransaction(type, money, selectedAccount.id, null, category, note)
                     refreshDashboard()
                 }
