@@ -38,7 +38,7 @@ New-Item -ItemType Directory -Path $ArtifactDir -Force | Out-Null
 
 gh run download --name app-debug --dir $ArtifactDir
 
-$apkFiles = @(Get-ChildItem -Path$ArtifactDir -Filter "*.apk" -Recurse)
+$apkFiles = @(Get-ChildItem .\dist -Filter "*.apk" -Recurse)
 if ($apkFiles.Count -gt 0) {
     $ApkPath =$apkFiles[0].FullName
     Write-Host "==> Sideloading APK to $deviceId..." -ForegroundColor Cyan
@@ -55,7 +55,7 @@ if ($apkFiles.Count -gt 0) {
 
     Write-Host "==> Launching PC mirror via scrcpy..." -ForegroundColor Cyan
     if (-not (Get-Process scrcpy -ErrorAction SilentlyContinue)) {
-        Start-Process scrcpy -ArgumentList "-s $deviceId --window-title `"Salary & Wealth Intelligence`" --stay-awake"
+        Start-Process scrcpy -ArgumentList "-s $deviceId --window-title `"Capital & Cashflow`" --stay-awake"
     }
     Write-Host "==> App successfully deployed and running!" -ForegroundColor Green
 } else {
