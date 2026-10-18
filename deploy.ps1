@@ -38,20 +38,25 @@ New-Item -ItemType Directory -Path $ArtifactDir -Force | Out-Null
 
 gh run download --name app-debug --dir $ArtifactDir
 
-$apkFiles = @(Get-ChildItem -Path$ArtifactDir -Filter "*.apk" -Recurse)
+$apkFiles = @(Get-ChildItem$ArtifactDir -Filter "*.apk" -Recurse)
 if ($apkFiles.Count -gt 0) {
     $ApkPath =$apkFiles[0].FullName
     Write-Host "==> Sideloading APK to $deviceId..." -ForegroundColor Cyan
     
     $installOutput = adb -s$deviceId install -r "$ApkPath" 2>&1
     if ($installOutput -match "INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
-        Write-Warning "Signature mismatch detected. Reinstalling cleanly..."
+        Write-Warning "Signature mismatch detected. Performing clean install..."
         adb -s $deviceId uninstall com.example.myfirstapp | Out-Null
         adb -s $deviceId install "$ApkPath"
     }
     
     Write-Host "==> Launching app..." -ForegroundColor Cyan
     adb -s $deviceId shell monkey -p com.example.myfirstapp -c android.intent.category.LAUNCHER 1
+
+    Write-Host "==> Launching PC mirror via scrcpy..." -ForegroundColor Cyan
+    if (-not (Get-Process scrcpy -ErrorAction SilentlyContinue)) {
+        Start-Process scrcpy -ArgumentList "-s $deviceId --window-title `"Salary Manager Preview`" --stay-awake"
+    }
     Write-Host "==> App successfully deployed and running!" -ForegroundColor Green
 } else {
     Write-Error "No APK found in downloaded artifacts."

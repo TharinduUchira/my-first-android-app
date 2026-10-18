@@ -8,388 +8,420 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
-import android.text.Editable
 import android.text.InputType
-import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import java.text.NumberFormat
-import java.util.Locale
+import java.text.SimpleDateFormat
+import java.util.*
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var dbHelper: SalaryDbHelper
-    private lateinit var recordsContainer: LinearLayout
-    private lateinit var netPayText: TextView
-    private lateinit var grossPayText: TextView
-    private lateinit var epfDeductionText: TextView
-    private lateinit var employerCostText: TextView
+    private lateinit var dbHelper: FinanceDbHelper
+    private lateinit var transactionsContainer: LinearLayout
 
-    // Form controls
+    // Metric Displays
+    private lateinit var bankBalanceText: TextView
+    private lateinit var netCashflowText: TextView
+    private lateinit var savingsRateText: TextView
+    private lateinit var runwayText: TextView
+    private lateinit var advisorBanner: LinearLayout
+    private lateinit var advisorText: TextView
+
+    // Controls
     private lateinit var currencySpinner: Spinner
-    private lateinit var periodInput: EditText
-    private lateinit var basicSalaryInput: EditText
-    private lateinit var allowanceInput: EditText
-    private lateinit var otHoursInput: EditText
-    private lateinit var otRateInput: EditText
-    private lateinit var otherDeductionsInput: EditText
-    private lateinit var epfCheckbox: CheckBox
+    private lateinit var bankBalanceInput: EditText
+    private lateinit var entryTitleInput: EditText
+    private lateinit var entryAmountInput: EditText
+    private lateinit var typeSpinner: Spinner
+    private lateinit var categorySpinner: Spinner
 
-    private var selectedCurrency: String = "LKR"
+    private var activeCurrency = "LKR"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        dbHelper = SalaryDbHelper(this)
+        dbHelper = FinanceDbHelper(this)
 
         val scrollView = ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor("#0F172A"))
+            setBackgroundColor(Color.parseColor("#0B0F19"))
             isFillViewport = true
         }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(36, 48, 36, 48)
+            setPadding(36, 44, 36, 60)
         }
         scrollView.addView(root)
 
-        // Title Header
+        // Top App Header
         val header = TextView(this).apply {
-            text = "Payroll & Salary Manager"
-            textSize = 24f
+            text = "Wealth & Expense Intelligence"
+            textSize = 22f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            setPadding(0, 0, 0, 8)
         }
-        val subHeader = TextView(this).apply {
-            text = "Track earnings, OT, and statutory EPF/ETF"
-            textSize = 14f
-            setTextColor(Color.parseColor("#94A3B8"))
-            setPadding(0, 0, 0, 32)
-        }
-        root.addView(header)
-        root.addView(subHeader)
-
-        // Currency Selector Card
-        val currencyCard = createCardLayout()
-        val currencyLabel = TextView(this).apply {
-            text = "Select Currency"
-            textSize = 14f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#334155"))
-            setPadding(0, 0, 0, 12)
-        }
-        currencySpinner = Spinner(this).apply {
-            val currencies = arrayOf("LKR (Rs.)", "USD ($)")
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, currencies)
-            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                    selectedCurrency = if (position == 0) "LKR" else "USD"
-                    updateCalculations()
-                    loadRecords()
-                }
-                override fun onNothingSelected(parent: AdapterView<*>?) {}
-            }
-        }
-        currencyCard.addView(currencyLabel)
-        currencyCard.addView(currencySpinner)
-        root.addView(currencyCard)
-
-        // Earnings Section Card
-        val earningsCard = createCardLayout()
-        val earningsTitle = createSectionTitle("1. Earnings & Inclusions")
-        periodInput = createInputField("Pay Period / Month (e.g. Oct 2026)", InputType.TYPE_CLASS_TEXT)
-        basicSalaryInput = createInputField("Basic Salary", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
-        allowanceInput = createInputField("Fixed Allowances / Budgetary Relief", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
-        
-        val otRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            weightSum = 2f
-        }
-        otHoursInput = createInputField("OT Hours", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = 12 }
-        }
-        otRateInput = createInputField("OT Rate / Hr", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        otRow.addView(otHoursInput)
-        otRow.addView(otRateInput)
-
-        earningsCard.addView(earningsTitle)
-        earningsCard.addView(periodInput)
-        earningsCard.addView(basicSalaryInput)
-        earningsCard.addView(allowanceInput)
-        earningsCard.addView(otRow)
-        root.addView(earningsCard)
-
-        // Deductions & Statutory Card
-        val deductionsCard = createCardLayout()
-        val deductionsTitle = createSectionTitle("2. Deductions & Statutory Contributions")
-        
-        epfCheckbox = CheckBox(this).apply {
-            text = "Deduct EPF (8% Employee Contribution)"
-            isChecked = true
-            setTextColor(Color.parseColor("#1E293B"))
-            setOnCheckedChangeListener { _, _ -> updateCalculations() }
-        }
-        otherDeductionsInput = createInputField("Other Deductions (Salary Advance / Loan / Tax)", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
-
-        deductionsCard.addView(deductionsTitle)
-        deductionsCard.addView(epfCheckbox)
-        deductionsCard.addView(otherDeductionsInput)
-        root.addView(deductionsCard)
-
-        // Live Summary Card
-        val summaryCard = createCardLayout().apply {
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#1E293B"))
-                cornerRadius = 24f
-            }
-        }
-        val summaryTitle = TextView(this).apply {
-            text = "Estimated Net Take-Home"
+        val subheader = TextView(this).apply {
+            text = "Track capital, cashflow, and cut unnecessary burn"
             textSize = 13f
             setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(0, 4, 0, 24)
         }
-        netPayText = TextView(this).apply {
+        root.addView(header)
+        root.addView(subheader)
+
+        // 1. Currency & Bank Balance Setup Card
+        val configCard = createDarkCard("#161F30")
+        val configRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+
+        val currLabel = createSmallLabel("CURRENCY")
+        currencySpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, arrayOf("LKR (Rs.)", "USD ($)"))
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                    activeCurrency = if (pos == 0) "LKR" else "USD"
+                    refreshDashboard()
+                }
+                override fun onNothingSelected(p: AdapterView<*>?) {}
+            }
+        }
+
+        bankBalanceInput = createInputField("Current Bank Balance", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
+        val updateBalanceBtn = createButton("Set Capital", "#2563EB", "#FFFFFF").apply {
+            setOnClickListener {
+                val amt = bankBalanceInput.text.toString().toDoubleOrNull()
+                if (amt != null) {
+                    dbHelper.setBankBalance(amt)
+                    bankBalanceInput.text.clear()
+                    refreshDashboard()
+                    Toast.makeText(this@MainActivity, "Base capital updated", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        configCard.addView(currLabel)
+        configCard.addView(currencySpinner)
+        configCard.addView(bankBalanceInput)
+        configCard.addView(updateBalanceBtn)
+        root.addView(configCard)
+
+        // 2. Executive Financial Overview Card
+        val overviewCard = createDarkCard("#1E293B")
+        val balanceLabel = createSmallLabel("TOTAL LIQUID CAPITAL")
+        bankBalanceText = TextView(this).apply {
             text = "Rs. 0.00"
-            textSize = 30f
+            textSize = 34f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#38BDF8"))
             setPadding(0, 4, 0, 16)
         }
-        grossPayText = createSummaryLine("Gross Earnings: Rs. 0.00")
-        epfDeductionText = createSummaryLine("Employee EPF (8%): Rs. 0.00")
-        employerCostText = createSummaryLine("Employer Liability (EPF 12% + ETF 3%): Rs. 0.00")
 
-        summaryCard.addView(summaryTitle)
-        summaryCard.addView(netPayText)
-        summaryCard.addView(grossPayText)
-        summaryCard.addView(epfDeductionText)
-        summaryCard.addView(employerCostText)
-        root.addView(summaryCard)
-
-        // Action Buttons
-        val buttonRow = LinearLayout(this).apply {
+        // Metrics Grid Row (Cashflow, Savings Rate, Runway)
+        val metricsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            weightSum = 2f
-            setPadding(0, 24, 0, 36)
+            weightSum = 3f
+            setPadding(0, 10, 0, 10)
         }
-        val saveBtn = Button(this).apply {
-            text = "Save Record"
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#2563EB"))
-                cornerRadius = 18f
-            }
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.3f).apply { marginEnd = 16 }
-            setOnClickListener { handleSaveRecord() }
-        }
-        val clearBtn = Button(this).apply {
-            text = "Clear All"
-            setTextColor(Color.parseColor("#EF4444"))
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#FEE2E2"))
-                cornerRadius = 18f
-            }
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.7f)
-            setOnClickListener {
-                dbHelper.deleteAllRecords()
-                loadRecords()
-                Toast.makeText(this@MainActivity, "All payroll records deleted", Toast.LENGTH_SHORT).show()
-            }
-        }
-        buttonRow.addView(saveBtn)
-        buttonRow.addView(clearBtn)
-        root.addView(buttonRow)
 
-        // History Section Header
-        val historyHeader = TextView(this).apply {
-            text = "Payroll History"
-            textSize = 18f
+        val col1 = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+        val col2 = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+        val col3 = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; layoutParams = LinearLayout.LayoutParams(0, -2, 1f) }
+
+        col1.addView(createSmallLabel("NET FLOW"))
+        netCashflowText = TextView(this).apply { textSize = 14f; setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE) }
+        col1.addView(netCashflowText)
+
+        col2.addView(createSmallLabel("SAVINGS %"))
+        savingsRateText = TextView(this).apply { textSize = 14f; setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE) }
+        col2.addView(savingsRateText)
+
+        col3.addView(createSmallLabel("RUNWAY"))
+        runwayText = TextView(this).apply { textSize = 14f; setTypeface(null, Typeface.BOLD); setTextColor(Color.parseColor("#F59E0B")) }
+        col3.addView(runwayText)
+
+        metricsRow.addView(col1)
+        metricsRow.addView(col2)
+        metricsRow.addView(col3)
+
+        overviewCard.addView(balanceLabel)
+        overviewCard.addView(bankBalanceText)
+        overviewCard.addView(metricsRow)
+        root.addView(overviewCard)
+
+        // 3. Smart Spending Reduction Advisor Banner
+        advisorBanner = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 20, 24, 20)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#2D1515"))
+                cornerRadius = 16f
+                setStroke(2, Color.parseColor("#F43F5E"))
+            }
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 24 }
+        }
+        val advTitle = TextView(this).apply {
+            text = "AI Spending Optimization Audit"
+            textSize = 13f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#FCA5A5"))
+        }
+        advisorText = TextView(this).apply {
+            text = "Analyzing spend velocity..."
+            textSize = 12f
+            setTextColor(Color.parseColor("#FEE2E2"))
+            setPadding(0, 4, 0, 0)
+        }
+        advisorBanner.addView(advTitle)
+        advisorBanner.addView(advisorText)
+        root.addView(advisorBanner)
+
+        // 4. Transaction Entry Card (Inflow / Outflow)
+        val entryCard = createDarkCard("#161F30")
+        val entryHeader = TextView(this).apply {
+            text = "Post Transaction / Monthly Flow"
+            textSize = 15f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            setPadding(0, 8, 0, 18)
+            setPadding(0, 0, 0, 14)
         }
-        root.addView(historyHeader)
+        entryTitleInput = createInputField("Description (e.g. Monthly Salary, Dining Out, Rent)", InputType.TYPE_CLASS_TEXT)
+        entryAmountInput = createInputField("Amount", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL)
 
-        recordsContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        // Dropdown: Type (Income vs Expense)
+        typeSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, arrayOf("Expense (Outflow)", "Income (Inflow)"))
         }
-        root.addView(recordsContainer)
 
-        // Real-time calculation triggers
-        val watcher = object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateCalculations() }
-            override fun afterTextChanged(s: Editable?) {}
+        // Dropdown: Category (Essential Need vs Discretionary Want)
+        categorySpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, arrayOf("Essential (Need / Bills / Food)", "Discretionary (Want / Entertainment / Luxury)", "Salary / Primary Income", "Side Income / Investment"))
         }
-        basicSalaryInput.addTextChangedListener(watcher)
-        allowanceInput.addTextChangedListener(watcher)
-        otHoursInput.addTextChangedListener(watcher)
-        otRateInput.addTextChangedListener(watcher)
-        otherDeductionsInput.addTextChangedListener(watcher)
+
+        val addEntryBtn = createButton("Record Transaction", "#10B981", "#FFFFFF").apply {
+            setOnClickListener { handleAddTransaction() }
+        }
+
+        entryCard.addView(entryHeader)
+        entryCard.addView(entryTitleInput)
+        entryCard.addView(entryAmountInput)
+        entryCard.addView(createSmallLabel("TRANSACTION TYPE"))
+        entryCard.addView(typeSpinner)
+        entryCard.addView(createSmallLabel("BUDGET CATEGORY"))
+        entryCard.addView(categorySpinner)
+        entryCard.addView(addEntryBtn)
+        root.addView(entryCard)
+
+        // 5. Ledger / History Section
+        val historyTitleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 10, 0, 16)
+        }
+        val histText = TextView(this).apply {
+            text = "Recent Transactions"
+            textSize = 17f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+        }
+        val clearAllBtn = TextView(this).apply {
+            text = "Reset Ledger"
+            textSize = 12f
+            setTextColor(Color.parseColor("#EF4444"))
+            setOnClickListener {
+                dbHelper.clearAllTransactions()
+                refreshDashboard()
+                Toast.makeText(this@MainActivity, "Ledger reset", Toast.LENGTH_SHORT).show()
+            }
+        }
+        historyTitleRow.addView(histText)
+        historyTitleRow.addView(clearAllBtn)
+        root.addView(historyTitleRow)
+
+        transactionsContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(transactionsContainer)
 
         setContentView(scrollView)
-        loadRecords()
+        refreshDashboard()
     }
 
-    private fun updateCalculations() {
-        val basic = basicSalaryInput.text.toString().toDoubleOrNull() ?: 0.0
-        val allowance = allowanceInput.text.toString().toDoubleOrNull() ?: 0.0
-        val otHours = otHoursInput.text.toString().toDoubleOrNull() ?: 0.0
-        val otRate = otRateInput.text.toString().toDoubleOrNull() ?: 0.0
-        val otherDeductions = otherDeductionsInput.text.toString().toDoubleOrNull() ?: 0.0
+    private fun handleAddTransaction() {
+        val title = entryTitleInput.text.toString().trim()
+        val amount = entryAmountInput.text.toString().toDoubleOrNull() ?: 0.0
+        val isIncome = typeSpinner.selectedItemPosition == 1
+        val categoryStr = categorySpinner.selectedItem.toString()
 
-        val otTotal = otHours * otRate
-        val grossEarnings = basic + allowance + otTotal
-
-        // EPF base typically includes Basic + Fixed Allowance
-        val epfBase = basic + allowance
-        val epfEmployee = if (epfCheckbox.isChecked) epfBase * 0.08 else 0.0
-        val epfEmployer = if (epfCheckbox.isChecked) epfBase * 0.12 else 0.0
-        val etfEmployer = if (epfCheckbox.isChecked) epfBase * 0.03 else 0.0
-
-        val totalDeductions = epfEmployee + otherDeductions
-        val netSalary = grossEarnings - totalDeductions
-
-        netPayText.text = formatValue(netSalary, selectedCurrency)
-        grossPayText.text = "Gross Earnings: ${formatValue(grossEarnings, selectedCurrency)}"
-        epfDeductionText.text = "Employee EPF (8%): ${formatValue(epfEmployee, selectedCurrency)}"
-        employerCostText.text = "Employer Liability (EPF 12% + ETF 3%): ${formatValue(epfEmployer + etfEmployer, selectedCurrency)}"
-    }
-
-    private fun handleSaveRecord() {
-        val period = periodInput.text.toString().trim()
-        val basic = basicSalaryInput.text.toString().toDoubleOrNull() ?: 0.0
-        val allowance = allowanceInput.text.toString().toDoubleOrNull() ?: 0.0
-        val otHours = otHoursInput.text.toString().toDoubleOrNull() ?: 0.0
-        val otRate = otRateInput.text.toString().toDoubleOrNull() ?: 0.0
-        val otherDeductions = otherDeductionsInput.text.toString().toDoubleOrNull() ?: 0.0
-
-        if (period.isEmpty() || basic <= 0.0) {
-            Toast.makeText(this, "Please enter pay period and valid basic salary", Toast.LENGTH_SHORT).show()
+        if (title.isEmpty() || amount <= 0.0) {
+            Toast.makeText(this, "Enter valid description and positive amount", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val otTotal = otHours * otRate
-        val gross = basic + allowance + otTotal
-        val epfEmployee = if (epfCheckbox.isChecked) (basic + allowance) * 0.08 else 0.0
-        val net = gross - (epfEmployee + otherDeductions)
+        val categoryType = if (isIncome) {
+            "INCOME"
+        } else if (categorySpinner.selectedItemPosition == 0) {
+            "NEED"
+        } else {
+            "WANT"
+        }
 
-        dbHelper.insertRecord(
-            period = period,
-            currency = selectedCurrency,
-            basic = basic,
-            allowance = allowance,
-            otTotal = otTotal,
-            deductions = epfEmployee + otherDeductions,
-            net = net
-        )
+        val dateStr = SimpleDateFormat("MMM dd, yyyy", Locale.US).format(Date())
+        dbHelper.insertTransaction(title, amount, if (isIncome) 1 else 0, categoryType, dateStr)
 
-        Toast.makeText(this, "Record saved for $period", Toast.LENGTH_SHORT).show()
-        periodInput.text.clear()
-        basicSalaryInput.text.clear()
-        allowanceInput.text.clear()
-        otHoursInput.text.clear()
-        otRateInput.text.clear()
-        otherDeductionsInput.text.clear()
-
-        updateCalculations()
-        loadRecords()
+        entryTitleInput.text.clear()
+        entryAmountInput.text.clear()
+        refreshDashboard()
+        Toast.makeText(this, "Transaction logged", Toast.LENGTH_SHORT).show()
     }
 
-    private fun loadRecords() {
-        recordsContainer.removeAllViews()
-        val records = dbHelper.getAllRecords()
+    private fun refreshDashboard() {
+        val startingBalance = dbHelper.getBankBalance()
+        val transactions = dbHelper.getAllTransactions()
 
-        if (records.isEmpty()) {
+        var totalIncome = 0.0
+        var totalExpenses = 0.0
+        var needsTotal = 0.0
+        var wantsTotal = 0.0
+
+        for (t in transactions) {
+            if (t.isIncome) {
+                totalIncome += t.amount
+            } else {
+                totalExpenses += t.amount
+                if (t.category == "NEED") needsTotal += t.amount else wantsTotal += t.amount
+            }
+        }
+
+        val currentLiquidBalance = startingBalance + totalIncome - totalExpenses
+        val netCashflow = totalIncome - totalExpenses
+
+        // 1. Update Core Displays
+        bankBalanceText.text = formatCurrency(currentLiquidBalance, activeCurrency)
+        
+        netCashflowText.text = (if (netCashflow >= 0) "+ " else "- ") + formatCurrency(Math.abs(netCashflow), activeCurrency)
+        netCashflowText.setTextColor(if (netCashflow >= 0) Color.parseColor("#10B981") else Color.parseColor("#F43F5E"))
+
+        val savingsRate = if (totalIncome > 0) ((totalIncome - totalExpenses) / totalIncome) * 100 else 0.0
+        savingsRateText.text = String.format(Locale.US, "%.1f%%", Math.max(0.0, savingsRate))
+
+        val monthlyBurn = if (totalExpenses > 0) totalExpenses else 1.0
+        val runwayMonths = if (currentLiquidBalance > 0) currentLiquidBalance / monthlyBurn else 0.0
+        runwayText.text = if (runwayMonths > 0) String.format(Locale.US, "%.1f Mo", runwayMonths) else "0 Mo"
+
+        // 2. Spending Reduction & Optimization Logic
+        renderSmartAdvice(totalIncome, totalExpenses, needsTotal, wantsTotal)
+
+        // 3. Render Transaction List
+        renderTransactionList(transactions)
+    }
+
+    private fun renderSmartAdvice(income: Double, expenses: Double, needs: Double, wants: Double) {
+        val wantsPercentage = if (income > 0) (wants / income) * 100 else 0.0
+        val needsPercentage = if (income > 0) (needs / income) * 100 else 0.0
+
+        if (income == 0.0 && expenses > 0.0) {
+            advisorBanner.visibility = View.VISIBLE
+            advisorText.text = "No recorded inflow. All outflows are draining liquid reserves."
+            return
+        }
+
+        if (wantsPercentage > 30.0) {
+            advisorBanner.visibility = View.VISIBLE
+            val excessiveAmount = wants - (income * 0.30)
+            advisorText.text = "⚠️ High Discretionary Burn: You are spending ${String.format(Locale.US, "%.1f", wantsPercentage)}% on non-essentials (Target: < 30%). Trimming ${formatCurrency(excessiveAmount, activeCurrency)} will restore your recommended 20% savings buffer."
+        } else if (expenses > income) {
+            advisorBanner.visibility = View.VISIBLE
+            advisorText.text = "⚠️ Deficit alert: Outflow exceeds inflow by ${formatCurrency(expenses - income, activeCurrency)}. Reduce non-essential expenses immediately."
+        } else {
+            advisorBanner.visibility = View.VISIBLE
+            advisorBanner.background = GradientDrawable().apply {
+                setColor(Color.parseColor("#13281E"))
+                cornerRadius = 16f
+                setStroke(2, Color.parseColor("#10B981"))
+            }
+            advisorText.setTextColor(Color.parseColor("#A7F3D0"))
+            advisorText.text = "✓ Optimal Budget: Needs (${String.format(Locale.US, "%.0f", needsPercentage)}%) and Wants (${String.format(Locale.US, "%.0f", wantsPercentage)}%) are within healthy 50/30 parameters."
+        }
+    }
+
+    private fun renderTransactionList(transactions: List<TransactionRecord>) {
+        transactionsContainer.removeAllViews()
+
+        if (transactions.isEmpty()) {
             val emptyNotice = TextView(this).apply {
-                text = "No saved payroll records yet."
-                textSize = 14f
+                text = "No transactions logged. Add income or expenses above."
+                textSize = 13f
                 setTextColor(Color.parseColor("#64748B"))
-                setPadding(8, 8, 8, 8)
+                setPadding(8, 12, 8, 12)
             }
-            recordsContainer.addView(emptyNotice)
+            transactionsContainer.addView(emptyNotice)
             return
         }
 
-        for (record in records) {
-            val itemCard = createCardLayout().apply {
-                val rowHeader = LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
+        for (t in transactions) {
+            val item = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(24, 20, 24, 20)
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#161F30"))
+                    cornerRadius = 14f
                 }
-                val title = TextView(this@MainActivity).apply {
-                    text = record.period
-                    textSize = 16f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(Color.parseColor("#0F172A"))
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                }
-                val badge = TextView(this@MainActivity).apply {
-                    text = record.currency
-                    textSize = 12f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(Color.parseColor("#2563EB"))
-                    setBackgroundColor(Color.parseColor("#DBEAFE"))
-                    setPadding(16, 6, 16, 6)
-                }
-                rowHeader.addView(title)
-                rowHeader.addView(badge)
-
-                val breakdown = TextView(this@MainActivity).apply {
-                    text = "Basic: ${formatValue(record.basic, record.currency)} | Allow: ${formatValue(record.allowance, record.currency)} | OT: ${formatValue(record.otTotal, record.currency)}"
-                    textSize = 13f
-                    setTextColor(Color.parseColor("#64748B"))
-                    setPadding(0, 8, 0, 4)
-                }
-
-                val deductionLine = TextView(this@MainActivity).apply {
-                    text = "Deductions (EPF + Other): ${formatValue(record.deductions, record.currency)}"
-                    textSize = 13f
-                    setTextColor(Color.parseColor("#EF4444"))
-                    setPadding(0, 0, 0, 8)
-                }
-
-                val netLine = TextView(this@MainActivity).apply {
-                    text = "Net Pay: ${formatValue(record.net, record.currency)}"
-                    textSize = 16f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(Color.parseColor("#059669"))
-                }
-
-                addView(rowHeader)
-                addView(breakdown)
-                addView(deductionLine)
-                addView(netLine)
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 12 }
             }
-            recordsContainer.addView(itemCard)
+
+            val leftCol = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+            }
+            val title = TextView(this).apply {
+                text = t.title
+                textSize = 15f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.WHITE)
+            }
+            val badgeText = if (t.isIncome) "INFLOW" else if (t.category == "NEED") "ESSENTIAL" else "DISCRETIONARY (WANT)"
+            val meta = TextView(this).apply {
+                text = "${t.date} • $badgeText"
+                textSize = 11f
+                setTextColor(if (t.category == "WANT") Color.parseColor("#F59E0B") else Color.parseColor("#64748B"))
+                setPadding(0, 4, 0, 0)
+            }
+            leftCol.addView(title)
+            leftCol.addView(meta)
+
+            val amountView = TextView(this).apply {
+                text = (if (t.isIncome) "+ " else "- ") + formatCurrency(t.amount, activeCurrency)
+                textSize = 15f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(if (t.isIncome) Color.parseColor("#10B981") else Color.parseColor("#F43F5E"))
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
+            item.addView(leftCol)
+            item.addView(amountView)
+            transactionsContainer.addView(item)
         }
     }
 
-    private fun createCardLayout(): LinearLayout {
+    private fun createDarkCard(bgColorHex: String): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(28, 28, 28, 28)
             background = GradientDrawable().apply {
-                setColor(Color.WHITE)
+                setColor(Color.parseColor(bgColorHex))
                 cornerRadius = 20f
             }
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 24 }
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 20 }
         }
     }
 
-    private fun createSectionTitle(title: String): TextView {
+    private fun createSmallLabel(text: String): TextView {
         return TextView(this).apply {
-            text = title
-            textSize = 15f
+            this.text = text
+            textSize = 10f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#0F172A"))
-            setPadding(0, 0, 0, 16)
+            setTextColor(Color.parseColor("#64748B"))
+            letterSpacing = 0.08f
+            setPadding(0, 0, 0, 4)
         }
     }
 
@@ -398,110 +430,124 @@ class MainActivity : AppCompatActivity() {
             this.hint = hint
             this.inputType = inputType
             textSize = 14f
-            setTextColor(Color.parseColor("#0F172A"))
-            setHintTextColor(Color.parseColor("#94A3B8"))
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.parseColor("#64748B"))
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#F1F5F9"))
+                setColor(Color.parseColor("#0F172A"))
+                cornerRadius = 12f
+            }
+            setPadding(24, 20, 24, 20)
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 12 }
+        }
+    }
+
+    private fun createButton(label: String, bgHex: String, textHex: String): Button {
+        return Button(this).apply {
+            text = label
+            setTextColor(Color.parseColor(textHex))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor(bgHex))
                 cornerRadius = 14f
             }
-            setPadding(24, 24, 24, 24)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 16 }
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = 6; bottomMargin = 6 }
         }
     }
 
-    private fun createSummaryLine(text: String): TextView {
-        return TextView(this).apply {
-            this.text = text
-            textSize = 13f
-            setTextColor(Color.parseColor("#CBD5E1"))
-            setPadding(0, 0, 0, 6)
-        }
-    }
-
-    private fun formatValue(amount: Double, currency: String): String {
+    private fun formatCurrency(amt: Double, currency: String): String {
         return if (currency == "LKR") {
-            "Rs. " + String.format(Locale.US, "%,.2f", amount)
+            "Rs. " + String.format(Locale.US, "%,.2f", amt)
         } else {
-            NumberFormat.getCurrencyInstance(Locale.US).format(amount)
+            NumberFormat.getCurrencyInstance(Locale.US).format(amt)
         }
     }
 }
 
-data class SalaryRecord(
+// Data Models
+data class TransactionRecord(
     val id: Long,
-    val period: String,
-    val currency: String,
-    val basic: Double,
-    val allowance: Double,
-    val otTotal: Double,
-    val deductions: Double,
-    val net: Double
+    val title: String,
+    val amount: Double,
+    val isIncome: Boolean,
+    val category: String,
+    val date: String
 )
 
-class SalaryDbHelper(context: Context) : SQLiteOpenHelper(context, "salary_manager.db", null, 2) {
+// Embedded SQLite Engine
+class FinanceDbHelper(context: Context) : SQLiteOpenHelper(context, "finance_intel.db", null, 1) {
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
-            CREATE TABLE salary_records (
+            CREATE TABLE profile (
+                id INTEGER PRIMARY KEY,
+                bank_balance REAL
+            )
+            """.trimIndent()
+        )
+        db.execSQL("INSERT INTO profile (id, bank_balance) VALUES (1, 0.0)")
+
+        db.execSQL(
+            """
+            CREATE TABLE transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                period TEXT,
-                currency TEXT,
-                basic REAL,
-                allowance REAL,
-                otTotal REAL,
-                deductions REAL,
-                net REAL
+                title TEXT,
+                amount REAL,
+                is_income INTEGER,
+                category TEXT,
+                date TEXT
             )
             """.trimIndent()
         )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS salary_records")
+        db.execSQL("DROP TABLE IF EXISTS profile")
+        db.execSQL("DROP TABLE IF EXISTS transactions")
         onCreate(db)
     }
 
-    fun insertRecord(
-        period: String,
-        currency: String,
-        basic: Double,
-        allowance: Double,
-        otTotal: Double,
-        deductions: Double,
-        net: Double
-    ): Long {
-        val db = writableDatabase
-        val values = ContentValues().apply {
-            put("period", period)
-            put("currency", currency)
-            put("basic", basic)
-            put("allowance", allowance)
-            put("otTotal", otTotal)
-            put("deductions", deductions)
-            put("net", net)
+    fun getBankBalance(): Double {
+        val db = readableDatabase
+        val cursor = db.rawQuery("SELECT bank_balance FROM profile WHERE id = 1", null)
+        var balance = 0.0
+        cursor.use {
+            if (it.moveToFirst()) balance = it.getDouble(0)
         }
-        return db.insert("salary_records", null, values)
+        return balance
     }
 
-    fun getAllRecords(): List<SalaryRecord> {
-        val list = mutableListOf<SalaryRecord>()
+    fun setBankBalance(amount: Double) {
+        val db = writableDatabase
+        val values = ContentValues().apply { put("bank_balance", amount) }
+        db.update("profile", values, "id = 1", null)
+    }
+
+    fun insertTransaction(title: String, amount: Double, isIncome: Int, category: String, date: String): Long {
+        val db = writableDatabase
+        val values = ContentValues().apply {
+            put("title", title)
+            put("amount", amount)
+            put("is_income", isIncome)
+            put("category", category)
+            put("date", date)
+        }
+        return db.insert("transactions", null, values)
+    }
+
+    fun getAllTransactions(): List<TransactionRecord> {
+        val list = mutableListOf<TransactionRecord>()
         val db = readableDatabase
-        val cursor = db.rawQuery("SELECT * FROM salary_records ORDER BY id DESC", null)
+        val cursor = db.rawQuery("SELECT * FROM transactions ORDER BY id DESC", null)
         cursor.use {
             while (it.moveToNext()) {
                 list.add(
-                    SalaryRecord(
+                    TransactionRecord(
                         id = it.getLong(it.getColumnIndexOrThrow("id")),
-                        period = it.getString(it.getColumnIndexOrThrow("period")),
-                        currency = it.getString(it.getColumnIndexOrThrow("currency")),
-                        basic = it.getDouble(it.getColumnIndexOrThrow("basic")),
-                        allowance = it.getDouble(it.getColumnIndexOrThrow("allowance")),
-                        otTotal = it.getDouble(it.getColumnIndexOrThrow("otTotal")),
-                        deductions = it.getDouble(it.getColumnIndexOrThrow("deductions")),
-                        net = it.getDouble(it.getColumnIndexOrThrow("net"))
+                        title = it.getString(it.getColumnIndexOrThrow("title")),
+                        amount = it.getDouble(it.getColumnIndexOrThrow("amount")),
+                        isIncome = it.getInt(it.getColumnIndexOrThrow("is_income")) == 1,
+                        category = it.getString(it.getColumnIndexOrThrow("category")),
+                        date = it.getString(it.getColumnIndexOrThrow("date"))
                     )
                 )
             }
@@ -509,8 +555,8 @@ class SalaryDbHelper(context: Context) : SQLiteOpenHelper(context, "salary_manag
         return list
     }
 
-    fun deleteAllRecords() {
+    fun clearAllTransactions() {
         val db = writableDatabase
-        db.delete("salary_records", null, null)
+        db.delete("transactions", null, null)
     }
 }
